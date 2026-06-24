@@ -5,7 +5,6 @@ Author: Celia Mercier
 """
 
 import pandas as pd
-import os
 
 
 def calculate_mssd(df, window=3):
@@ -24,14 +23,35 @@ def calculate_mssd(df, window=3):
     return df
 
 
-def apply_decision_rules(df, threshold_quantile=0.80, cooldown_minutes=5, max_prompts_per_day=4):
+def add_within_person_threshold(df, threshold_quantile=0.80):
     df = df.copy()
     df = df.sort_values(["user_id", "timestamp"])
 
-    df["send_prompt"] = False
-    df["decision_reason"] = "below threshold"
+    df["user_threshold"] = (
+        df.groupby("user_id")["observed_mssd"]
+        .transform(
+            lambda s: s.expanding(min_periods=3)
+            .quantile(threshold_quantile)
+            .shift(1)
+        )
+    )
 
-    threshold = df["observed_mssd"].quantile(threshold_quantile)
+    return df
+
+
+def apply_decision_rules(
+    df,
+    threshold_quantile=0.80,
+    cooldown_minutes=60,
+    max_prompts_per_day=4
+):
+    df = df.copy()
+    df = df.sort_values(["user_id", "timestamp"])
+
+    df = add_within_person_threshold(df, threshold_quantile)
+
+    df["send_prompt"] = False
+    df["decision_reason"] = "below within-person threshold"
 
     for user_id in df["user_id"].unique():
         user_df = df[df["user_id"] == user_id]
@@ -43,8 +63,11 @@ def apply_decision_rules(df, threshold_quantile=0.80, cooldown_minutes=5, max_pr
             if pd.isna(row["observed_mssd"]):
                 df.at[idx, "decision_reason"] = "missing or insufficient EMA data"
 
-            elif row["observed_mssd"] < threshold:
-                df.at[idx, "decision_reason"] = "below threshold"
+            elif pd.isna(row["user_threshold"]):
+                df.at[idx, "decision_reason"] = "insufficient within-person history"
+
+            elif row["observed_mssd"] <= row["user_threshold"]:
+                df.at[idx, "decision_reason"] = "below within-person threshold"
 
             else:
                 day = row["timestamp"].date()
@@ -61,19 +84,34 @@ def apply_decision_rules(df, threshold_quantile=0.80, cooldown_minutes=5, max_pr
                     df.at[idx, "decision_reason"] = "cooldown active"
 
                 else:
-                    df.at[idx, "send_prompt"] = True
                     df.at[idx, "decision_reason"] = "prompt sent"
                     last_prompt_time = row["timestamp"]
                     prompts_by_day[day] += 1
+
+    df["send_prompt"] = df["decision_reason"] == "prompt sent"
 
     return df
 
 
 def summarize_decisions(df):
     summary = df.groupby("user_id").agg(
-        prompts_sent=("send_prompt", "sum"),
+        prompts_sent=("decision_reason", lambda x: (x == "prompt sent").sum()),
         average_mssd=("observed_mssd", "mean"),
         max_mssd=("observed_mssd", "max"),
+        average_threshold=("user_threshold", "mean"),
+        max_threshold=("user_threshold", "max"),
     )
 
     return summary.reset_index()
+
+
+def validate_prompt_counts_vary(summary_df):
+    unique_counts = summary_df["prompts_sent"].nunique()
+
+    if unique_counts <= 1:
+        raise AssertionError(
+            "All users received the same prompt count. "
+            "This may indicate the prompt-counting logic or per-user threshold is broken."
+        )
+
+    return True

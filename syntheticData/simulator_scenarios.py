@@ -4,10 +4,15 @@ Scenario-based simulator skeleton for REACT volatility detection
 Author: Celia Mercier
 """
 
+import os
 import pandas as pd
 from datetime import datetime, timedelta
 
 from decision_engine import calculate_mssd, apply_decision_rules
+
+
+BASE_DIR = os.path.dirname(__file__)
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 
 class VolatilityScenario:
@@ -66,6 +71,8 @@ class VolatilitySimulator:
 
 
 def run_test_scenarios():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
     scenarios = [
         VolatilityScenario(
             name="low_volatility",
@@ -76,7 +83,7 @@ def run_test_scenarios():
         VolatilityScenario(
             name="high_volatility",
             ema_values=[1, 5, 1, 5, 1, 5],
-            expected_behavior="Expected: prompts should be triggered because EMA responses change sharply.",
+            expected_behavior="Expected: prompts should be triggered because EMA responses change sharply, while cooldown rules limit repeated prompts.",
         ),
 
         VolatilityScenario(
@@ -107,12 +114,17 @@ def run_test_scenarios():
             "minutes_late",
             "ema",
             "observed_mssd",
+            "user_threshold",
             "send_prompt",
             "decision_reason"
         ]])
 
     final_df = pd.concat(all_results, ignore_index=True)
-    final_df.to_csv("scenario_test_outputs.csv", index=False)
+
+    final_df.to_csv(
+        os.path.join(OUTPUT_DIR, "scenario_test_outputs.csv"),
+        index=False
+    )
 
     print("\nDONE RUNNING SCENARIO TESTS")
 
